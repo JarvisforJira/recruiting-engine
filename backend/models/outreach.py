@@ -51,4 +51,4 @@ class ResponseAssist(BaseModel):
     intent_detected: str
     suggested_response: str
     tone_notes: str
-    created_at: Union[datetime, str]
+    created_at: datetime

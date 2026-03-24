@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from bson import ObjectId
 from datetime import datetime, timezone
 from typing import Optional
 from db.mongodb import get_db
@@ -9,9 +10,7 @@ router = APIRouter(prefix="/prospects", tags=["prospects"])
 
 
 def _serialize(doc) -> dict:
-    doc = dict(doc)
-    doc["id"] = doc.get("_id", doc.get("id", ""))
-    doc.pop("_id", None)
+    doc["id"] = str(doc.pop("_id"))
     return doc
 
 
@@ -32,7 +31,7 @@ async def list_prospects(
 
     prospects = []
     async for doc in db.prospects.find(query).sort("score", -1):
-        role = db.roles.find_one({"_id": doc.get("role_id")})
+        role = await db.roles.find_one({"_id": ObjectId(doc["role_id"])})
         doc["role_title"] = role["title"] if role else None
         prospects.append(_serialize(doc))
     return prospects
@@ -41,13 +40,13 @@ async def list_prospects(
 @router.post("/", response_model=Prospect)
 async def create_prospect(data: ProspectCreate):
     db = get_db()
-    role_doc = db.roles.find_one({"_id": data.role_id})
+    role_doc = await db.roles.find_one({"_id": ObjectId(data.role_id)})
     if not role_doc:
         raise HTTPException(404, "Role not found")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
     doc = {**data.model_dump(), "status": "new", "created_at": now, "updated_at": now}
-    result = db.prospects.insert_one(doc)
+    result = await db.prospects.insert_one(doc)
     doc["_id"] = result.inserted_id
     doc["role_title"] = role_doc["title"]
     return _serialize(doc)
@@ -56,10 +55,10 @@ async def create_prospect(data: ProspectCreate):
 @router.get("/{prospect_id}", response_model=Prospect)
 async def get_prospect(prospect_id: str):
     db = get_db()
-    doc = db.prospects.find_one({"_id": prospect_id})
+    doc = await db.prospects.find_one({"_id": ObjectId(prospect_id)})
     if not doc:
         raise HTTPException(404, "Prospect not found")
-    role = db.roles.find_one({"_id": doc.get("role_id")})
+    role = await db.roles.find_one({"_id": ObjectId(doc["role_id"])})
     doc["role_title"] = role["title"] if role else None
     return _serialize(doc)
 
@@ -70,11 +69,15 @@ async def update_prospect(prospect_id: str, data: ProspectUpdate):
     updates = {k: v for k, v in data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No fields to update")
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = db.prospects.find_one_and_update({"_id": prospect_id}, {"$set": updates})
+    updates["updated_at"] = datetime.now(timezone.utc)
+    result = await db.prospects.find_one_and_update(
+        {"_id": ObjectId(prospect_id)},
+        {"$set": updates},
+        return_document=True,
+    )
     if not result:
         raise HTTPException(404, "Prospect not found")
-    role = db.roles.find_one({"_id": result.get("role_id")})
+    role = await db.roles.find_one({"_id": ObjectId(result["role_id"])})
     result["role_title"] = role["title"] if role else None
     return _serialize(result)
 
@@ -82,18 +85,18 @@ async def update_prospect(prospect_id: str, data: ProspectUpdate):
 @router.post("/{prospect_id}/score", response_model=Prospect)
 async def score_prospect(prospect_id: str):
     db = get_db()
-    doc = db.prospects.find_one({"_id": prospect_id})
+    doc = await db.prospects.find_one({"_id": ObjectId(prospect_id)})
     if not doc:
         raise HTTPException(404, "Prospect not found")
 
-    role_doc = db.roles.find_one({"_id": doc.get("role_id")})
+    role_doc = await db.roles.find_one({"_id": ObjectId(doc["role_id"])})
     if not role_doc:
         raise HTTPException(404, "Role not found")
 
-    plan_doc = db.targeting_plans.find_one({"role_id": doc.get("role_id")})
+    plan_doc = await db.targeting_plans.find_one({"role_id": doc["role_id"]})
     targeting_plan = plan_doc if plan_doc else {}
 
-    role = {**role_doc, "id": role_doc.get("_id", "")}
+    role = {**role_doc, "id": str(role_doc["_id"])}
     ai_result = ai_service.score_prospect(doc["raw_profile"], role, targeting_plan)
 
     updates = {
@@ -101,7 +104,7 @@ async def score_prospect(prospect_id: str):
         "priority": ai_result.get("priority"),
         "score_reasoning": ai_result.get("score_reasoning"),
         "outreach_angle": ai_result.get("outreach_angle"),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc),
     }
     if not doc.get("name") and ai_result.get("name") and ai_result["name"] != "Unknown":
         updates["name"] = ai_result["name"]
@@ -110,8 +113,12 @@ async def score_prospect(prospect_id: str):
     if not doc.get("current_company") and ai_result.get("current_company"):
         updates["current_company"] = ai_result["current_company"]
 
-    updated = db.prospects.find_one_and_update({"_id": prospect_id}, {"$set": updates})
-    role_doc2 = db.roles.find_one({"_id": updated.get("role_id")})
+    updated = await db.prospects.find_one_and_update(
+        {"_id": ObjectId(prospect_id)},
+        {"$set": updates},
+        return_document=True,
+    )
+    role_doc2 = await db.roles.find_one({"_id": ObjectId(updated["role_id"])})
     updated["role_title"] = role_doc2["title"] if role_doc2 else None
     return _serialize(updated)
 
@@ -131,7 +138,7 @@ async def score_batch(prospect_ids: list[str]):
 @router.delete("/{prospect_id}")
 async def delete_prospect(prospect_id: str):
     db = get_db()
-    result = db.prospects.delete_one({"_id": prospect_id})
+    result = await db.prospects.delete_one({"_id": ObjectId(prospect_id)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Prospect not found")
     return {"deleted": True}

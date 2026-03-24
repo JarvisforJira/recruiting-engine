@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from db.mongodb import get_db
 from services import ai_service
+import json
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -8,17 +9,16 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 @router.get("/overview")
 async def get_overview():
     db = get_db()
-
-    total_roles = db.roles.count_documents({"status": "active"})
-    total_prospects = db.prospects.count_documents({})
-    total_contacted = db.prospects.count_documents(
+    total_roles = await db.roles.count_documents({"status": "active"})
+    total_prospects = await db.prospects.count_documents({})
+    total_contacted = await db.prospects.count_documents(
         {"status": {"$in": ["contacted", "replied", "in_conversation", "converted"]}}
     )
-    total_replied = db.prospects.count_documents(
+    total_replied = await db.prospects.count_documents(
         {"status": {"$in": ["replied", "in_conversation", "converted"]}}
     )
-    total_converted = db.prospects.count_documents({"status": "converted"})
-    total_declined = db.prospects.count_documents({"status": "declined"})
+    total_converted = await db.prospects.count_documents({"status": "converted"})
+    total_declined = await db.prospects.count_documents({"status": "declined"})
 
     reply_rate = round((total_replied / total_contacted * 100), 1) if total_contacted > 0 else 0
     contact_rate = round((total_contacted / total_prospects * 100), 1) if total_prospects > 0 else 0
@@ -40,12 +40,12 @@ async def analytics_by_role():
     db = get_db()
     results = []
     async for role in db.roles.find({"status": "active"}):
-        role_id = role.get("_id")
-        prospects = db.prospects.count_documents({"role_id": role_id})
-        contacted = db.prospects.count_documents(
+        role_id = str(role["_id"])
+        prospects = await db.prospects.count_documents({"role_id": role_id})
+        contacted = await db.prospects.count_documents(
             {"role_id": role_id, "status": {"$in": ["contacted", "replied", "in_conversation", "converted"]}}
         )
-        replied = db.prospects.count_documents(
+        replied = await db.prospects.count_documents(
             {"role_id": role_id, "status": {"$in": ["replied", "in_conversation", "converted"]}}
         )
         results.append({
@@ -85,13 +85,11 @@ async def get_ai_insights():
     status_bd = await status_breakdown()
     priority_bd = await priority_breakdown()
 
-    import json
     stats = {
         "overview": overview,
         "by_role": by_role[:5],
         "status_breakdown": status_bd,
         "priority_breakdown": priority_bd,
     }
-
     insights = ai_service.generate_analytics_insights(stats)
     return {"insights": insights, "stats": stats}

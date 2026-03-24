@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from bson import ObjectId
 from datetime import datetime, timezone
 from db.mongodb import get_db
 from models.role import Role, RoleCreate, RoleUpdate
@@ -7,9 +8,7 @@ router = APIRouter(prefix="/roles", tags=["roles"])
 
 
 def _serialize(doc) -> dict:
-    doc = dict(doc)
-    doc["id"] = doc.get("_id", doc.get("id", ""))
-    doc.pop("_id", None)
+    doc["id"] = str(doc.pop("_id"))
     return doc
 
 
@@ -18,12 +17,12 @@ async def list_roles():
     db = get_db()
     roles = []
     async for doc in db.roles.find().sort("created_at", -1):
-        role_id = doc.get("_id") or doc.get("id")
-        doc["prospect_count"] = db.prospects.count_documents({"role_id": role_id})
-        doc["contacted_count"] = db.prospects.count_documents(
+        role_id = str(doc["_id"])
+        doc["prospect_count"] = await db.prospects.count_documents({"role_id": role_id})
+        doc["contacted_count"] = await db.prospects.count_documents(
             {"role_id": role_id, "status": {"$in": ["contacted", "replied", "in_conversation", "converted"]}}
         )
-        doc["replied_count"] = db.prospects.count_documents(
+        doc["replied_count"] = await db.prospects.count_documents(
             {"role_id": role_id, "status": {"$in": ["replied", "in_conversation", "converted"]}}
         )
         roles.append(_serialize(doc))
@@ -33,9 +32,9 @@ async def list_roles():
 @router.post("/", response_model=Role)
 async def create_role(data: RoleCreate):
     db = get_db()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
     doc = {**data.model_dump(), "status": "active", "created_at": now, "updated_at": now}
-    result = db.roles.insert_one(doc)
+    result = await db.roles.insert_one(doc)
     doc["_id"] = result.inserted_id
     doc["prospect_count"] = 0
     doc["contacted_count"] = 0
@@ -46,15 +45,16 @@ async def create_role(data: RoleCreate):
 @router.get("/{role_id}", response_model=Role)
 async def get_role(role_id: str):
     db = get_db()
-    doc = db.roles.find_one({"_id": role_id})
+    doc = await db.roles.find_one({"_id": ObjectId(role_id)})
     if not doc:
         raise HTTPException(404, "Role not found")
-    doc["prospect_count"] = db.prospects.count_documents({"role_id": role_id})
-    doc["contacted_count"] = db.prospects.count_documents(
-        {"role_id": role_id, "status": {"$in": ["contacted", "replied", "in_conversation", "converted"]}}
+    rid = str(doc["_id"])
+    doc["prospect_count"] = await db.prospects.count_documents({"role_id": rid})
+    doc["contacted_count"] = await db.prospects.count_documents(
+        {"role_id": rid, "status": {"$in": ["contacted", "replied", "in_conversation", "converted"]}}
     )
-    doc["replied_count"] = db.prospects.count_documents(
-        {"role_id": role_id, "status": {"$in": ["replied", "in_conversation", "converted"]}}
+    doc["replied_count"] = await db.prospects.count_documents(
+        {"role_id": rid, "status": {"$in": ["replied", "in_conversation", "converted"]}}
     )
     return _serialize(doc)
 
@@ -65,16 +65,21 @@ async def update_role(role_id: str, data: RoleUpdate):
     updates = {k: v for k, v in data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No fields to update")
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = db.roles.find_one_and_update({"_id": role_id}, {"$set": updates})
+    updates["updated_at"] = datetime.now(timezone.utc)
+    result = await db.roles.find_one_and_update(
+        {"_id": ObjectId(role_id)},
+        {"$set": updates},
+        return_document=True,
+    )
     if not result:
         raise HTTPException(404, "Role not found")
-    result["prospect_count"] = db.prospects.count_documents({"role_id": role_id})
-    result["contacted_count"] = db.prospects.count_documents(
-        {"role_id": role_id, "status": {"$in": ["contacted", "replied", "in_conversation", "converted"]}}
+    rid = str(result["_id"])
+    result["prospect_count"] = await db.prospects.count_documents({"role_id": rid})
+    result["contacted_count"] = await db.prospects.count_documents(
+        {"role_id": rid, "status": {"$in": ["contacted", "replied", "in_conversation", "converted"]}}
     )
-    result["replied_count"] = db.prospects.count_documents(
-        {"role_id": role_id, "status": {"$in": ["replied", "in_conversation", "converted"]}}
+    result["replied_count"] = await db.prospects.count_documents(
+        {"role_id": rid, "status": {"$in": ["replied", "in_conversation", "converted"]}}
     )
     return _serialize(result)
 
@@ -82,7 +87,7 @@ async def update_role(role_id: str, data: RoleUpdate):
 @router.delete("/{role_id}")
 async def delete_role(role_id: str):
     db = get_db()
-    result = db.roles.delete_one({"_id": role_id})
+    result = await db.roles.delete_one({"_id": ObjectId(role_id)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Role not found")
     return {"deleted": True}
